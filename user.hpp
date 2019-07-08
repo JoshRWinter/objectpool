@@ -31,7 +31,7 @@ struct entity
 	
 	~entity()
 	{
-		//fprintf(stderr, "entity %d destructor\n", id);
+		//fprintf(stderr, "entity destructor\n");
 	}
 
 	std::string print()
