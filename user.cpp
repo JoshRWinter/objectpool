@@ -14,9 +14,8 @@ void tests()
 {
 	{
 		say("new pool");
-		std::unique_ptr<objectpool<entity>> pool(get_pool(5));
+		std::unique_ptr<objectpool<entity, 100>> pool(get_pool());
 
-		assert(pool->maximum == 5);
 		assert(pool->num == 0);
 		assert(pool->opte == 0);
 		for(int i = 0; i < 5; ++i)
@@ -54,8 +53,8 @@ void tests()
 
 	{
 		say("new pool");
-		std::unique_ptr<objectpool<entity>> ptr(get_pool(10));
-		objectpool<entity> &pool = *ptr.get();
+		std::unique_ptr<objectpool<entity, 100>> ptr(get_pool());
+		objectpool<entity, 100> &pool = *ptr.get();
 
 		assert(pool.opte == 0);
 		assert(pool.num == 0);
@@ -145,8 +144,8 @@ void benchmarks()
 	timing t;
 
 	{
-		std::unique_ptr<objectpool<entity>> ptr(get_pool(40000));
-		objectpool<entity> &pool = *ptr;
+		std::unique_ptr<objectpool<entity, 100>> ptr(get_pool());
+		objectpool<entity, 100> &pool = *ptr;
 		std::vector<entity*> reflist;
 
 		mersenne_random m(44);

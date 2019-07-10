@@ -25,15 +25,20 @@ template <typename T> struct objectpool_node
 	bool occupado;
 };
 
-template <typename T> class objectpool;
 template <typename T> class objectpool_iterator
 {
-	friend class objectpool<T>;
-
 public:
+	objectpool_iterator(objectpool_node<T> *n, objectpool_node<T> *e)
+		: node(n)
+		, opte(e)
+	{
+		while(node < opte && !node->occupado)
+			++node;
+	}
+
 	T *operator->()
 	{
-		return (T*)node->object;
+		return (T*)node->object_row;
 	}
 
 	T &operator*()
@@ -56,39 +61,20 @@ public:
 		return node != other.node;
 	}
 
-	objectpool_iterator<T> operator+(int add) const
-	{
-		return objectpool_iterator<T>(node + add);
-	}
-
-	objectpool_iterator<T> operator-(int sub) const
-	{
-		return objectpool_iterator<T>(node - sub);
-	}
-
 private:
-	objectpool_iterator(objectpool_node<T> *n, objectpool_node<T> *e)
-		: node(n)
-		, opte(e)
-	{
-		while(node < opte && !node->occupado)
-			++node;
-	}
-
 	objectpool_node<T> *node;
 	objectpool_node<T> *opte;
 };
 
-template <typename T> class objectpool
+template <typename T, int MAXIMUM> class objectpool
 {
 	friend class objectpool_iterator<T>;
 
 public:
-	objectpool(const int m)
-		: maximum(m)
-		, num(0)
+	objectpool()
+		: num(0)
 		, opte(0)
-		, storage(new objectpool_node<T>[maximum])
+		, storage(new objectpool_node<T>[MAXIMUM])
 	{}
 
 	~objectpool()
@@ -112,7 +98,7 @@ public:
 			const int index = freelist.back();
 			freelist.erase(freelist.end() - 1);
 
-			return replace(std::forward<Ts>(args)..., index);
+			return replace(index, std::forward<Ts>(args)...);
 		}
 	}
 
@@ -123,15 +109,15 @@ public:
 		const unsigned long long index = node - storage.get();
 
 		// destroy <obj>
-		storage[index].occupado = false;
 		storage[index].destruct();
+		storage[index].occupado = false;
 		freelist.push_back(index);
 
 		if(index + 1 == opte)
 		{
 			// figure out the new ending index
 			int current = index - 1;
-			while(current > 0)
+			while(current >= 0)
 			{
 				if(storage[current].occupado)
 				{
@@ -167,9 +153,9 @@ public:
 private:
 	template <typename... Ts> T *append(Ts&&... args)
 	{
-		if(opte >= maximum)
+		if(opte >= MAXIMUM)
 		{
-			fprintf(stderr, "objectpool: maximum occupancy (%d) exceeded\n", maximum);
+			fprintf(stderr, "objectpool (%s): maximum occupancy (%d) exceeded\n", typeid(T).name(), MAXIMUM);
 			abort();
 		}
 
@@ -189,7 +175,6 @@ private:
 		freelist.clear();
 	}
 
-	const int maximum; // size of the backing storage
 	int num; // number of live objects in the pool
 	int opte; // one-past-the-end of the last live object
 	std::unique_ptr<objectpool_node<T>[]> storage;

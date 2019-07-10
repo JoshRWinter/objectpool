@@ -78,5 +78,5 @@ struct timing
 	std::chrono::time_point<std::chrono::high_resolution_clock> ending;
 };
 
-objectpool<entity> *get_pool(int);
+objectpool<entity, 100> *get_pool();
 void process(entity*);
