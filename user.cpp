@@ -14,21 +14,18 @@ void tests()
 {
 	{
 		say("new pool");
-		std::unique_ptr<objectpool<entity, 100>> pool(get_pool());
+		std::unique_ptr<objectpool<entity, POOL_SIZE>> pool(get_pool());
 
 		assert(pool->num == 0);
-		assert(pool->opte == 0);
-		for(int i = 0; i < 5; ++i)
-			assert(!pool->storage[i].occupado);
+		assert(pool->head == NULL);
+		assert(pool->tail == NULL);
 
 		say("creating e1");
-		entity *e1 = pool->create();
+		entity &e1 = pool->create();
 
 		assert(pool->num == 1);
-		assert(pool->opte == 1);
-		assert(pool->storage[0].occupado);
-		for(int i = 1; i < 5; ++i)
-			assert(!pool->storage[i].occupado);
+		assert(pool->head == &(objectpool_node<entity>&)e1);
+		assert(pool->tail == &(objectpool_node<entity>&)e1);
 
 		// process the entities to prevent optimization
 		int looped = 0;
@@ -44,29 +41,43 @@ void tests()
 		pool->destroy(e1);
 
 		assert(pool->num == 0);
-		assert(pool->opte == 0);
-		for(int i = 0; i < 5; ++i)
-			assert(!pool->storage[i].occupado);
+		assert(pool->head == NULL);
+		assert(pool->tail == NULL);
 
 		say("pool destructor");
 	}
 
 	{
 		say("new pool");
-		std::unique_ptr<objectpool<entity, 100>> ptr(get_pool());
-		objectpool<entity, 100> &pool = *ptr.get();
+		std::unique_ptr<objectpool<entity, POOL_SIZE>> ptr(get_pool());
+		objectpool<entity, POOL_SIZE> &pool = *ptr.get();
 
-		assert(pool.opte == 0);
 		assert(pool.num == 0);
+		assert(pool.head == NULL);
+		assert(pool.tail == NULL);
 
 		say("creating 4 ents");
-		entity *e1 = pool.create();
-		entity *e2 = pool.create();
-		entity *e3 = pool.create();
-		entity *e4 = pool.create();
+		entity &e1 = pool.create();
+		entity &e2 = pool.create();
+		entity &e3 = pool.create();
+		entity &e4 = pool.create();
 
-		assert(pool.opte == 4);
 		assert(pool.num == 4);
+
+		assert(pool.head == &(objectpool_node<entity>&)e1);
+		assert(pool.tail == &(objectpool_node<entity>&)e4);
+
+		assert(((objectpool_node<entity>&)e1).next == &(objectpool_node<entity>&)e2);
+		assert(((objectpool_node<entity>&)e1).prev == NULL);
+
+		assert(((objectpool_node<entity>&)e2).next == &(objectpool_node<entity>&)e3);
+		assert(((objectpool_node<entity>&)e2).prev == &(objectpool_node<entity>&)e1);
+
+		assert(((objectpool_node<entity>&)e3).next == &(objectpool_node<entity>&)e4);
+		assert(((objectpool_node<entity>&)e3).prev == &(objectpool_node<entity>&)e2);
+
+		assert(((objectpool_node<entity>&)e4).next == NULL);
+		assert(((objectpool_node<entity>&)e4).prev == &(objectpool_node<entity>&)e3);
 
 		int looped = 0;
 		for(entity &e : pool)
@@ -82,15 +93,22 @@ void tests()
 		pool.destroy(e2);
 		pool.destroy(e3);
 
-		assert(pool.opte == 4);
 		assert(pool.num == 2);
+
+		assert(pool.head == &(objectpool_node<entity>&)e1);
+		assert(pool.tail == &(objectpool_node<entity>&)e4);
+		assert(((objectpool_node<entity>&)e1).next == &(objectpool_node<entity>&)e4);
+		assert(((objectpool_node<entity>&)e1).prev == NULL);
+		assert(((objectpool_node<entity>&)e4).prev == &(objectpool_node<entity>&)e1);
+		assert(((objectpool_node<entity>&)e4).next == NULL);
 
 		assert(pool.freelist.size() == 2);
 		assert(pool.freelist[0] == 1);
 		assert(pool.freelist[1] == 2);
 
 		looped = 0;
-		for(entity &e : pool)
+		const objectpool<entity, POOL_SIZE> &const_pool = pool;
+		for(const entity &e : const_pool)
 		{
 			++looped;
 			process(&e);
@@ -102,8 +120,12 @@ void tests()
 		say("deleted e4");
 		pool.destroy(e4);
 
+		assert(((objectpool_node<entity>&)e1).next == NULL);
+		assert(((objectpool_node<entity>&)e1).prev == NULL);
+		assert(pool.head == &(objectpool_node<entity>&)e1);
+		assert(pool.tail == &(objectpool_node<entity>&)e1);
+
 		assert(pool.num == 1);
-		assert(pool.opte == 1);
 
 		looped = 0;
 		for(entity &e : pool)
@@ -127,7 +149,6 @@ void tests()
 		say("looped 0 times");
 
 		assert(looped == 0);
-		assert(pool.opte == 0);
 		assert(pool.num == 0);
 
 		assert(pool.freelist.size() == 0);
@@ -144,15 +165,14 @@ void benchmarks()
 	timing t;
 
 	{
-		std::unique_ptr<objectpool<entity, 100>> ptr(get_pool());
-		objectpool<entity, 100> &pool = *ptr;
+		std::unique_ptr<objectpool<entity, POOL_SIZE>> ptr(get_pool());
+		objectpool<entity, POOL_SIZE> &pool = *ptr;
 		std::vector<entity*> reflist;
 
-		mersenne_random m(44);
 		const int initial_count = 10;
 		// fill it up
 		for(int i = 0; i < initial_count; ++i)
-			reflist.push_back(pool.create());
+			reflist.push_back(&pool.create());
 
 		// delete
 		for(auto it = reflist.begin(); it != reflist.end();)
@@ -164,12 +184,12 @@ void benchmarks()
 		}
 		for(entity &e : pool)
 			if(e.id % 2 == 0)
-				pool.destroy(&e);
+				pool.destroy(e);
 
 		// create
 		for(int i = 0; i < 10; ++i)
 		{
-			reflist.push_back(pool.create());
+			reflist.push_back(&pool.create());
 		}
 
 		// delete
@@ -182,12 +202,12 @@ void benchmarks()
 		}
 		for(entity &e : pool)
 			if(e.id % 3 == 0)
-				pool.destroy(&e);
+				pool.destroy(e);
 
 		// create
 		for(int i = 0; i < 10; ++i)
 		{
-			reflist.push_back(pool.create());
+			reflist.push_back(&pool.create());
 		}
 
 		// delete
@@ -200,12 +220,12 @@ void benchmarks()
 		}
 		for(entity &e : pool)
 			if(e.id % 2 == 0)
-				pool.destroy(&e);
+				pool.destroy(e);
 
 		// create
 		for(int i = 0; i < 10; ++i)
 		{
-			reflist.push_back(pool.create());
+			reflist.push_back(&pool.create());
 		}
 
 		// delete
@@ -218,12 +238,12 @@ void benchmarks()
 		}
 		for(entity &e : pool)
 			if(e.id % 3 == 0)
-				pool.destroy(&e);
+				pool.destroy(e);
 
 		// create
 		for(int i = 0; i < 20; ++i)
 		{
-			reflist.push_back(pool.create());
+			reflist.push_back(&pool.create());
 		}
 
 		// delete
@@ -236,7 +256,7 @@ void benchmarks()
 		}
 		for(entity &e : pool)
 			if(e.id % 2 == 0)
-				pool.destroy(&e);
+				pool.destroy(e);
 
 		for(entity *e : reflist)
 			fprintf(stderr, "%d, ", e->id);
@@ -277,6 +297,6 @@ void benchmarks()
 
 int main()
 {
-	//tests();
+	tests();
 	benchmarks();
 }

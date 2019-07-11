@@ -6,12 +6,9 @@
 
 template <typename T> struct objectpool_node
 {
-	objectpool_node()
-		: occupado(false)
-	{}
+	objectpool_node() = default;
 
 	template <typename... Ts> objectpool_node(bool, Ts&&... args)
-		: occupado(true)
 	{
 		new (object_raw) T(std::forward<Ts>(args)...);
 	}
@@ -22,24 +19,16 @@ template <typename T> struct objectpool_node
 	}
 
 	unsigned char object_raw[sizeof(T)];
-	bool occupado;
+	objectpool_node<T> *next;
+	objectpool_node<T> *prev;
 };
 
 template <typename T> class objectpool_iterator
 {
 public:
-	objectpool_iterator(objectpool_node<T> *n, objectpool_node<T> *e)
-		: node(n)
-		, opte(e)
-	{
-		while(node < opte && !node->occupado)
-			++node;
-	}
-
-	T *operator->()
-	{
-		return (T*)node->object_row;
-	}
+	objectpool_iterator(objectpool_node<T> *h)
+		: node(h)
+	{}
 
 	T &operator*()
 	{
@@ -48,7 +37,7 @@ public:
 
 	void operator++()
 	{
-		while(++node < opte && !node->occupado);
+		node = node->next;
 	}
 
 	bool operator==(const objectpool_iterator<T> &other) const
@@ -63,7 +52,37 @@ public:
 
 private:
 	objectpool_node<T> *node;
-	objectpool_node<T> *opte;
+};
+
+template <typename T> class objectpool_const_iterator
+{
+public:
+	objectpool_const_iterator(const objectpool_node<T> *h)
+		: node(h)
+	{}
+
+	const T &operator*() const
+	{
+		return *((T*)node->object_raw);
+	}
+
+	void operator++()
+	{
+		node = node->next;
+	}
+
+	bool operator==(const objectpool_const_iterator<T> &other) const
+	{
+		return node == other.node;
+	}
+
+	bool operator!=(const objectpool_const_iterator<T> &other) const
+	{
+		return node != other.node;
+	}
+
+private:
+	const objectpool_node<T> *node;
 };
 
 template <typename T, int MAXIMUM> class objectpool
@@ -73,7 +92,8 @@ template <typename T, int MAXIMUM> class objectpool
 public:
 	objectpool()
 		: num(0)
-		, opte(0)
+		, head(NULL)
+		, tail(NULL)
 		, storage(new objectpool_node<T>[MAXIMUM])
 	{}
 
@@ -81,57 +101,66 @@ public:
 	{
 		for(T &t : *this)
 		{
-			destroy(&t);
+			destroy(t);
 		}
 	}
 
-	template <typename... Ts> T *create(Ts&&... args)
+	template <typename... Ts> T &create(Ts&&... args)
 	{
-		++num;
+		objectpool_node<T> *node;
 
 		if(freelist.empty())
 		{
-			return append(std::forward<Ts>(args)...);
+			node = append(std::forward<Ts>(args)...);
 		}
 		else
 		{
 			const int index = freelist.back();
 			freelist.erase(freelist.end() - 1);
 
-			return replace(index, std::forward<Ts>(args)...);
+			node = replace(index, std::forward<Ts>(args)...);
 		}
+
+		node->prev = tail;
+		node->next = NULL;
+
+		if(tail != NULL)
+		{
+			tail->next = node;
+			tail = node;
+		}
+		else
+		{
+			// list is empty
+			head = node;
+			tail = node;
+		}
+
+		++num;
+		return *((T*)node->object_raw);
 	}
 
-	void destroy(const T *const obj)
+	void destroy(const T &obj)
 	{
 		// figure out what index <obj> is
-		const objectpool_node<T> *const node = (objectpool_node<T>*)obj;
+		const objectpool_node<T> *const node = (objectpool_node<T>*)&obj;
 		const unsigned long long index = node - storage.get();
-
-		// destroy <obj>
-		storage[index].destruct();
-		storage[index].occupado = false;
 		freelist.push_back(index);
 
-		if(index + 1 == opte)
-		{
-			// figure out the new ending index
-			int current = index - 1;
-			while(current >= 0)
-			{
-				if(storage[current].occupado)
-				{
-					break;
-				}
+		storage[index].destruct();
 
-				--current;
-			}
+		if(node->prev == NULL)
+			head = node->next;
+		else
+			node->prev->next = node->next;
 
-			opte = current + 1;
-		}
+		if(node->next == NULL)
+			tail = node->prev;
+		else
+			node->next->prev = node->prev;
 
 		if(--num == 0)
-			reset(); // clear the free list
+			reset();
 	}
 
 	int count() const
@@ -141,42 +170,49 @@ public:
 
 	objectpool_iterator<T> begin()
 	{
-		return objectpool_iterator<T>(storage.get(), storage.get() + opte);
+		return objectpool_iterator<T>(head);
 	}
 
 	objectpool_iterator<T> end()
 	{
-		objectpool_node<T> *e = storage.get() + opte;
-		return objectpool_iterator<T>(e, e);
+		return objectpool_iterator<T>(NULL);
+	}
+
+	objectpool_const_iterator<T> begin() const
+	{
+		return objectpool_const_iterator<T>(head);
+	}
+
+	objectpool_const_iterator<T> end() const
+	{
+		return objectpool_const_iterator<T>(NULL);
 	}
 
 private:
-	template <typename... Ts> T *append(Ts&&... args)
+	template <typename... Ts> objectpool_node<T> *append(Ts&&... args)
 	{
-		if(opte >= MAXIMUM)
+		if(num >= MAXIMUM)
 		{
 			fprintf(stderr, "objectpool (%s): maximum occupancy (%d) exceeded\n", typeid(T).name(), MAXIMUM);
 			abort();
 		}
 
-		T *obj = (T*)(new (storage.get() + opte) objectpool_node<T>(true, std::forward<Ts>(args)...))->object_raw;
-		++opte;
-		return obj;
+		return new (storage.get() + num) objectpool_node<T>(true, std::forward<Ts>(args)...);
 	}
 
-	template <typename... Ts> T *replace(const int index, Ts&&... args)
+	template <typename... Ts> objectpool_node<T> *replace(const int index, Ts&&... args)
 	{
-		return (T*)(new (storage.get() + index) objectpool_node<T>(true, std::forward<Ts>(args)...))->object_raw;
+		return new (storage.get() + index) objectpool_node<T>(true, std::forward<Ts>(args)...);
 	}
 
 	void reset()
 	{
-		opte = 0;
 		freelist.clear();
 	}
 
 	int num; // number of live objects in the pool
-	int opte; // one-past-the-end of the last live object
+	objectpool_node<T> *head;
+	objectpool_node<T> *tail;
 	std::unique_ptr<objectpool_node<T>[]> storage;
 	std::vector<int> freelist;
 };
