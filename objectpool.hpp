@@ -2,7 +2,21 @@
 #define OBJECT_POOL_HPP
 
 #include <vector>
-#include <memory>
+
+struct resettable
+{
+	virtual void reset() = 0;
+	virtual ~resettable() = 0;
+};
+inline resettable::~resettable() {}
+
+inline std::vector<resettable*> all_pools;
+
+inline void reset_all_pools()
+{
+	for(resettable *pool : all_pools)
+		pool->reset();
+}
 
 template <typename T> struct objectpool_node
 {
@@ -54,50 +68,22 @@ private:
 	objectpool_node<T> *node;
 };
 
-template <typename T> class objectpool_const_iterator
-{
-public:
-	objectpool_const_iterator(const objectpool_node<T> *h)
-		: node(h)
-	{}
-
-	const T &operator*() const
-	{
-		return *((T*)node->object_raw);
-	}
-
-	void operator++()
-	{
-		node = node->next;
-	}
-
-	bool operator==(const objectpool_const_iterator<T> &other) const
-	{
-		return node == other.node;
-	}
-
-	bool operator!=(const objectpool_const_iterator<T> &other) const
-	{
-		return node != other.node;
-	}
-
-private:
-	const objectpool_node<T> *node;
-};
-
-template <typename T, int MAXIMUM> class objectpool
+template <typename T, int M> class objectpool : resettable
 {
 	friend class objectpool_iterator<T>;
+
+	constexpr static int MAXIMUM = M;
 
 public:
 	objectpool()
 		: num(0)
 		, head(NULL)
 		, tail(NULL)
-		, storage(new objectpool_node<T>[MAXIMUM])
-	{}
+	{
+		all_pools.push_back(this);
+	}
 
-	~objectpool()
+	virtual ~objectpool() override
 	{
 		reset();
 	}
@@ -141,7 +127,7 @@ public:
 	{
 		// figure out what index <obj> is
 		const objectpool_node<T> *const node = (objectpool_node<T>*)&obj;
-		const unsigned long long index = node - storage.get();
+		const unsigned long long index = node - storage;
 		freelist.push_back(index);
 
 		storage[index].destruct();
@@ -160,11 +146,6 @@ public:
 			freelist.clear();
 	}
 
-	int count() const
-	{
-		return num;
-	}
-
 	objectpool_iterator<T> begin()
 	{
 		return objectpool_iterator<T>(head);
@@ -175,18 +156,15 @@ public:
 		return objectpool_iterator<T>(NULL);
 	}
 
-	objectpool_const_iterator<T> begin() const
+	int count() const
 	{
-		return objectpool_const_iterator<T>(head);
+		return num;
 	}
 
-	objectpool_const_iterator<T> end() const
+	virtual void reset() override
 	{
-		return objectpool_const_iterator<T>(NULL);
-	}
+		num = 0;
 
-	void reset()
-	{
 		for(T &t : *this)
 		{
 			destroy(t);
@@ -204,18 +182,18 @@ private:
 			abort();
 		}
 
-		return new (storage.get() + num) objectpool_node<T>(true, std::forward<Ts>(args)...);
+		return new (storage + num) objectpool_node<T>(true, std::forward<Ts>(args)...);
 	}
 
 	template <typename... Ts> objectpool_node<T> *replace(const int index, Ts&&... args)
 	{
-		return new (storage.get() + index) objectpool_node<T>(true, std::forward<Ts>(args)...);
+		return new (storage + index) objectpool_node<T>(true, std::forward<Ts>(args)...);
 	}
 
 	int num; // number of live objects in the pool
 	objectpool_node<T> *head;
 	objectpool_node<T> *tail;
-	std::unique_ptr<objectpool_node<T>[]> storage;
+	objectpool_node<T> storage[MAXIMUM];
 	std::vector<int> freelist;
 };
 
