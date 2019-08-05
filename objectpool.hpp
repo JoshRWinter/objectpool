@@ -99,10 +99,7 @@ public:
 
 	~objectpool()
 	{
-		for(T &t : *this)
-		{
-			destroy(t);
-		}
+		reset();
 	}
 
 	template <typename... Ts> T &create(Ts&&... args)
@@ -160,7 +157,7 @@ public:
 			node->next->prev = node->prev;
 
 		if(--num == 0)
-			reset();
+			freelist.clear();
 	}
 
 	int count() const
@@ -188,6 +185,16 @@ public:
 		return objectpool_const_iterator<T>(NULL);
 	}
 
+	void reset()
+	{
+		for(T &t : *this)
+		{
+			destroy(t);
+		}
+
+		freelist.clear();
+	}
+
 private:
 	template <typename... Ts> objectpool_node<T> *append(Ts&&... args)
 	{
@@ -203,11 +210,6 @@ private:
 	template <typename... Ts> objectpool_node<T> *replace(const int index, Ts&&... args)
 	{
 		return new (storage.get() + index) objectpool_node<T>(true, std::forward<Ts>(args)...);
-	}
-
-	void reset()
-	{
-		freelist.clear();
 	}
 
 	int num; // number of live objects in the pool
