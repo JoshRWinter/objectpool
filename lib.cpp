@@ -5,9 +5,9 @@ float ysum = 0.0f;
 float rotsum = 0.0f;
 float dirsum = 0.0f;
 
-objectpool<entity, POOL_SIZE> *get_pool()
+objectpool<entity> *get_pool()
 {
-	return new objectpool<entity, POOL_SIZE>();
+	return new objectpool<entity>();
 }
 
 void process(entity *e)

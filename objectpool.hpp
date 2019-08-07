@@ -2,6 +2,14 @@
 #define OBJECT_POOL_HPP
 
 #include <vector>
+#include <memory>
+
+#include <string.h>
+
+namespace win
+{
+	[[noreturn]] void bug(const std::string &s) { fprintf(stderr, "%s\n", s.c_str()); abort(); }
+}
 
 struct resettable
 {
@@ -33,52 +41,90 @@ template <typename T> struct objectpool_node
 	}
 
 	unsigned char object_raw[sizeof(T)];
-	objectpool_node<T> *next;
-	objectpool_node<T> *prev;
+	short next;
+	short prev;
 };
 
+template <typename T> class objectpool;
 template <typename T> class objectpool_iterator
 {
 public:
-	objectpool_iterator(objectpool_node<T> *h)
-		: node(h)
+	objectpool_iterator(objectpool<T> &objpool, short idx)
+		: pool(objpool)
+		, index(idx)
 	{}
 
 	T &operator*()
 	{
-		return *((T*)node->object_raw);
+		return pool[index];
 	}
 
 	void operator++()
 	{
-		node = node->next;
+		index = pool.storage[index].next;
 	}
 
 	bool operator==(const objectpool_iterator<T> &other) const
 	{
-		return node == other.node;
+		return index == other.index;
 	}
 
 	bool operator!=(const objectpool_iterator<T> &other) const
 	{
-		return node != other.node;
+		return index != other.index;
 	}
 
 private:
-	objectpool_node<T> *node;
+	objectpool<T> &pool;
+	short index;
 };
 
-template <typename T, int M> class objectpool : resettable
+template <typename T> class objectpool_const_iterator
+{
+public:
+	objectpool_const_iterator(const objectpool<T> &objpool, short idx)
+		: pool(objpool)
+		, index(idx)
+	{}
+
+	const T &operator*() const
+	{
+		return pool[index];
+	}
+
+	void operator++()
+	{
+		index = pool.storage[index].next;
+	}
+
+	bool operator==(const objectpool_const_iterator<T> &other) const
+	{
+		return index == other.index;
+	}
+
+	bool operator!=(const objectpool_const_iterator<T> &other) const
+	{
+		return index != other.index;
+	}
+
+private:
+	const objectpool<T> &pool;
+	short index;
+};
+
+template <typename T> class objectpool : resettable
 {
 	friend class objectpool_iterator<T>;
 
-	constexpr static int MAXIMUM = M;
+	constexpr static int INITIAL_CAPACITY = 10;
 
 public:
 	objectpool()
 		: num(0)
-		, head(NULL)
-		, tail(NULL)
+		, head(-1)
+		, tail(-1)
+		, capacity(INITIAL_CAPACITY)
+		, storage(new objectpool_node<T>[INITIAL_CAPACITY])
 	{
 		all_pools.push_back(this);
 	}
@@ -88,59 +134,67 @@ public:
 		reset();
 	}
 
-	template <typename... Ts> T &create(Ts&&... args)
+	template <typename... Ts> int create(Ts&&... args)
 	{
-		objectpool_node<T> *node;
+		int loc;
 
 		if(freelist.empty())
 		{
-			node = append(std::forward<Ts>(args)...);
+			loc = append(std::forward<Ts>(args)...);
 		}
 		else
 		{
-			const int index = freelist.back();
+			const int idx = freelist.back();
 			freelist.erase(freelist.end() - 1);
 
-			node = replace(index, std::forward<Ts>(args)...);
+			loc = replace(idx, std::forward<Ts>(args)...);
 		}
 
-		node->prev = tail;
-		node->next = NULL;
+		objectpool_node<T> &node = storage[loc];
 
-		if(tail != NULL)
-		{
-			tail->next = node;
-			tail = node;
-		}
+		node.prev = tail;
+		node.next = -1;
+
+		if(tail != -1)
+			storage[tail].next = loc;
 		else
-		{
-			// list is empty
-			head = node;
-			tail = node;
-		}
+			head = loc; // list is empty
+
+		tail = loc;
 
 		++num;
-		return *((T*)node->object_raw);
+		return loc;
 	}
 
 	void destroy(const T &obj)
 	{
-		// figure out what index <obj> is
-		const objectpool_node<T> *const node = (objectpool_node<T>*)&obj;
-		const unsigned long long index = node - storage;
-		freelist.push_back(index);
+		const objectpool_node<T> *node = (const objectpool_node<T>*)&obj;
+		const int idx = node - storage.get();
 
-		storage[index].destruct();
+#ifndef NDEBUG
+		if(idx >= capacity || idx < 0)
+			win::bug("destroying out of bounds in pool " + std::string(typeid(T).name()));
+#endif
 
-		if(node->prev == NULL)
-			head = node->next;
+		destroy(idx);
+	}
+
+	void destroy(const int loc)
+	{
+		freelist.push_back(loc);
+		storage[loc].destruct();
+
+		objectpool_node<T> &node = storage[loc];
+
+		if(node.prev == -1)
+			head = node.next;
 		else
-			node->prev->next = node->next;
+			storage[node.prev].next = node.next;
 
-		if(node->next == NULL)
-			tail = node->prev;
+		if(node.next == -1)
+			tail = node.prev;
 		else
-			node->next->prev = node->prev;
+			storage[node.next].prev = node.prev;
 
 		if(--num == 0)
 			freelist.clear();
@@ -148,17 +202,52 @@ public:
 
 	objectpool_iterator<T> begin()
 	{
-		return objectpool_iterator<T>(head);
+		return objectpool_iterator<T>(*this, head);
 	}
 
 	objectpool_iterator<T> end()
 	{
-		return objectpool_iterator<T>(NULL);
+		return objectpool_iterator<T>(*this, -1);
+	}
+
+	objectpool_const_iterator<T> begin() const
+	{
+		return objectpool_const_iterator<T>(*this, head);
+	}
+
+	objectpool_const_iterator<T> end() const
+	{
+		return objectpool_const_iterator<T>(*this, -1);
+	}
+
+	T &operator[](const int idx)
+	{
+#ifndef NDEBUG
+		if(idx >= capacity || idx < 0)
+			win::bug("error: index " + std::to_string(idx) + " out of bounds in pool of " + typeid(T).name());
+#endif
+		return (T&)storage[idx];
+	}
+
+	const T &operator[](const int idx) const
+	{
+#ifndef NDEBUG
+		if(idx >= capacity || idx < 0)
+			win::bug("error: index " + std::to_string(idx) + " out of bounds in pool of " + typeid(T).name());
+#endif
+		return (T&)storage[idx];
 	}
 
 	int count() const
 	{
 		return num;
+	}
+
+	int index(const T &object) const
+	{
+		const objectpool_node<T> *node = (const objectpool_node<T>*)&object;
+
+		return node - storage.get();
 	}
 
 	virtual void reset() override
@@ -174,26 +263,56 @@ public:
 	}
 
 private:
-	template <typename... Ts> objectpool_node<T> *append(Ts&&... args)
+	template <typename... Ts> int append(Ts&&... args)
 	{
-		if(num >= MAXIMUM)
+		if(num >= capacity)
 		{
-			fprintf(stderr, "objectpool (%s): maximum occupancy (%d) exceeded\n", typeid(T).name(), MAXIMUM);
-			abort();
+			resize();
 		}
 
-		return new (storage + num) objectpool_node<T>(true, std::forward<Ts>(args)...);
+#ifndef NDEBUG
+		if(num >= capacity)
+			win::bug("out of bounds when appending");
+#endif
+
+		new (storage.get() + num) objectpool_node<T>(true, std::forward<Ts>(args)...);
+		return num;
 	}
 
-	template <typename... Ts> objectpool_node<T> *replace(const int index, Ts&&... args)
+	template <typename... Ts> int replace(const int idx, Ts&&... args)
 	{
-		return new (storage + index) objectpool_node<T>(true, std::forward<Ts>(args)...);
+#ifndef NDEBUG
+		if(idx >= capacity)
+			win::bug("out of bounds when replacing");
+#endif
+
+		new (storage.get() + idx) objectpool_node<T>(true, std::forward<Ts>(args)...);
+		return idx;
+	}
+
+	void resize()
+	{
+		double mult;
+
+		if(capacity < 30)
+			mult = 2.0;
+		else
+			mult = 1.5;
+
+		const int new_capacity = capacity * mult;
+
+		objectpool_node<T> *new_storage = new objectpool_node<T>[new_capacity];
+		memcpy(new_storage, storage.get(), sizeof(objectpool_node<T>) * capacity);
+		storage.reset(new_storage);
+
+		capacity = new_capacity;
 	}
 
 	int num; // number of live objects in the pool
-	objectpool_node<T> *head;
-	objectpool_node<T> *tail;
-	objectpool_node<T> storage[MAXIMUM];
+	int head;
+	int tail;
+	int capacity;
+	std::unique_ptr<objectpool_node<T>[]> storage;
 	std::vector<int> freelist;
 };
 

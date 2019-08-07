@@ -3,8 +3,6 @@
 
 #include "objectpool.hpp"
 
-#define POOL_SIZE 50
-
 inline struct mersenne_random
 {
 	mersenne_random(int s = 42069) : generator(s) {}
@@ -80,6 +78,6 @@ struct timing
 	std::chrono::time_point<std::chrono::high_resolution_clock> ending;
 };
 
-objectpool<entity, POOL_SIZE> *get_pool();
+objectpool<entity> *get_pool();
 void process(entity*);
 void process(const entity*);
