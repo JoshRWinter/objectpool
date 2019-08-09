@@ -29,6 +29,52 @@ inline void reset_all_pools()
 namespace pool
 {
 
+template <typename T> struct storage;
+
+#ifndef NDEBUG
+template <typename T> void index_check(storage<T> *parent, int index)
+{
+	if(parent == NULL || index < 0 || index >= parent->capacity)
+		win::bug("index " + std::to_string(index) + " is out of bounds for pool<" + typeid(decltype(parent)).name());
+}
+
+template <typename T> void index_check(const storage<T> *parent, int index)
+{
+	if(parent == NULL || index < 0 || index >= parent->capacity)
+		win::bug("index " + std::to_string(index) + " is out of bounds for pool<" + typeid(decltype(parent)).name());
+}
+#endif
+
+template <typename T> struct tenant
+{
+	tenant()
+		: parent(NULL), index(-1) {}
+	tenant(storage<T> *const p, const unsigned i)
+		: parent(p), index(i) {}
+
+	T &operator->()
+	{
+#ifndef NDEBUG
+		index_check(parent, index);
+#endif
+
+		return *(T*)parent->array[index].object_raw;
+	}
+
+	T &operator*()
+	{
+#ifndef NDEBUG
+		index_check(parent, index);
+#endif
+
+		return parent->array[index].object_raw;
+	}
+
+private:
+	storage<T> *const parent;
+	const int index;
+};
+
 template <typename T> struct storage_node
 {
 	storage_node() = default;
@@ -48,7 +94,6 @@ template <typename T> struct storage_node
 	short prev;
 };
 
-template <typename T> class storage;
 template <typename T> class storage_iterator
 {
 public:
@@ -82,10 +127,45 @@ private:
 	short index;
 };
 
+template <typename T> class storage_const_iterator
+{
+public:
+	storage_const_iterator(const storage<T> &objpool, short idx)
+		: parent(objpool)
+		, index(idx)
+	{}
+
+	const T &operator*() const
+	{
+		return parent[index];
+	}
+
+	void operator++()
+	{
+		index = parent.array[index].next;
+	}
+
+	bool operator==(const storage_const_iterator<T> &other) const
+	{
+		return index == other.index;
+	}
+
+	bool operator!=(const storage_const_iterator<T> &other) const
+	{
+		return index != other.index;
+	}
+
+private:
+	const storage<T> &parent;
+	short index;
+};
+
 template <typename T> class storage : resettable
 {
 	friend class storage_iterator<T>;
-	//friend class objectpool_const_iterator<T>;
+	friend class storage_const_iterator<T>;
+	friend void index_check<T>(storage<T>*, int);
+	friend void index_check<T>(const storage<T>*, int);
 
 	constexpr static int INITIAL_CAPACITY = 10;
 
@@ -105,7 +185,7 @@ public:
 		reset();
 	}
 
-	template <typename... Ts> int create(Ts&&... args)
+	template <typename... Ts> tenant<T> create(Ts&&... args)
 	{
 		int loc;
 
@@ -134,24 +214,26 @@ public:
 		tail = loc;
 
 		++num;
-		return loc;
+		return tenant<T>(this, loc);
+	}
+
+	void destroy(const tenant<T> &t)
+	{
+		destroy(t.index);
 	}
 
 	void destroy(const T &obj)
 	{
-		const storage_node<T> *node = (const storage_node<T>*)&obj;
-		const int idx = node - array.get();
-
-#ifndef NDEBUG
-		if(idx >= capacity || idx < 0)
-			win::bug("destroying out of bounds in pool " + std::string(typeid(T).name()));
-#endif
-
-		destroy(idx);
+		storage_node<T> *node = (storage_node<T>*)&obj;
+		destroy(node - array.get());
 	}
 
 	void destroy(const int loc)
 	{
+#ifndef NDEBUG
+		index_check(this, loc);
+#endif
+
 		freelist.push_back(loc);
 		array[loc].destruct();
 
@@ -181,46 +263,37 @@ public:
 		return storage_iterator<T>(*this, -1);
 	}
 
-	/*
-	objectpool_const_iterator<T> begin() const
+	storage_const_iterator<T> begin() const
 	{
-		return objectpool_const_iterator<T>(*this, head);
+		return storage_const_iterator<T>(*this, head);
 	}
 
-	objectpool_const_iterator<T> end() const
+	storage_const_iterator<T> end() const
 	{
-		return objectpool_const_iterator<T>(*this, -1);
+		return storage_const_iterator<T>(*this, -1);
 	}
-	*/
 
-	T &operator[](const int idx)
+	T &operator[](int idx)
 	{
 #ifndef NDEBUG
-		if(idx >= capacity || idx < 0)
-			win::bug("error: index " + std::to_string(idx) + " out of bounds in pool of " + typeid(T).name());
+		index_check(this, idx);
 #endif
-		return (T&)array[idx];
+
+		return *(T*)array[idx].object_raw;
 	}
 
-	const T &operator[](const int idx) const
+	const T &operator[](int idx) const
 	{
 #ifndef NDEBUG
-		if(idx >= capacity || idx < 0)
-			win::bug("error: index " + std::to_string(idx) + " out of bounds in pool of " + typeid(T).name());
+		index_check(this, idx);
 #endif
-		return (T&)array[idx];
+
+		return *(const T*)array[idx].object_raw;
 	}
 
 	int count() const
 	{
 		return num;
-	}
-
-	int index(const T &object) const
-	{
-		const storage_node<T> *node = (const storage_node<T>*)&object;
-
-		return node - array.get();
 	}
 
 	virtual void reset() override

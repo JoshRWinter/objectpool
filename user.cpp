@@ -22,7 +22,7 @@ void tests()
 		assert(storage->tail == -1);
 
 		say("creating e1");
-		entity &e1 = (*storage)[(storage->create())];
+		pool::tenant<entity> e1 = storage->create();
 
 		assert(storage->num == 1);
 		assert(storage->head == 0);
@@ -59,27 +59,27 @@ void tests()
 		assert(storage.tail == -1);
 
 		say("creating 4 ents");
-		int e1 = storage.create();
-		int e2 = storage.create();
-		int e3 = storage.create();
-		int e4 = storage.create();
+		pool::tenant<entity> e1 = storage.create();
+		pool::tenant<entity> e2 = storage.create();
+		pool::tenant<entity> e3 = storage.create();
+		pool::tenant<entity> e4 = storage.create();
 
 		assert(storage.num == 4);
 
 		assert(storage.head == 0);
 		assert(storage.tail == 3);
 
-		assert(storage.array[e1].next == e2);
-		assert(storage.array[e1].prev == -1);
+		assert(storage.array[e1.index].next == e2.index);
+		assert(storage.array[e1.index].prev == -1);
 
-		assert(storage.array[e2].next == e3);
-		assert(storage.array[e2].prev == e1);
+		assert(storage.array[e2.index].next == e3.index);
+		assert(storage.array[e2.index].prev == e1.index);
 
-		assert(storage.array[e3].next == e4);
-		assert(storage.array[e3].prev == e2);
+		assert(storage.array[e3.index].next == e4.index);
+		assert(storage.array[e3.index].prev == e2.index);
 
-		assert(storage.array[e4].next == -1);
-		assert(storage.array[e4].prev == e3);
+		assert(storage.array[e4.index].next == -1);
+		assert(storage.array[e4.index].prev == e3.index);
 
 		int looped = 0;
 		for(entity &e : storage)
@@ -99,16 +99,15 @@ void tests()
 
 		assert(storage.head == 0);
 		assert(storage.tail == 3);
-		assert(storage.array[e1].next == e4);
-		assert(storage.array[e1].prev == -1);
-		assert(storage.array[e4].prev == e1);
-		assert(storage.array[e4].next == -1);
+		assert(storage.array[e1.index].next == e4.index);
+		assert(storage.array[e1.index].prev == -1);
+		assert(storage.array[e4.index].prev == e1.index);
+		assert(storage.array[e4.index].next == -1);
 
 		assert(storage.freelist.size() == 2);
 		assert(storage.freelist[0] == 1);
 		assert(storage.freelist[1] == 2);
 
-		/*
 		looped = 0;
 		const pool::storage<entity> &const_storage = storage;
 		for(const entity &e : const_storage)
@@ -119,15 +118,14 @@ void tests()
 
 		assert(looped == 2);
 		say("looped 2 times");
-		*/
 
 		say("deleted e4");
 		storage.destroy(e4);
 
-		assert(storage.array[e1].next == -1);
-		assert(storage.array[e1].prev == -1);
-		assert(storage.head == e1);
-		assert(storage.tail == e1);
+		assert(storage.array[e1.index].next == -1);
+		assert(storage.array[e1.index].prev == -1);
+		assert(storage.head == e1.index);
+		assert(storage.tail == e1.index);
 
 		assert(storage.num == 1);
 
@@ -177,7 +175,7 @@ void benchmarks()
 		const int initial_count = 10;
 		// fill it up
 		for(int i = 0; i < initial_count; ++i)
-			reflist.push_back(storage.create());
+			reflist.push_back(storage.create().index);
 
 		// delete
 		for(auto it = reflist.begin(); it != reflist.end();)
@@ -194,7 +192,7 @@ void benchmarks()
 		// create
 		for(int i = 0; i < 10; ++i)
 		{
-			reflist.push_back(storage.create());
+			reflist.push_back(storage.create().index);
 		}
 
 		// delete
@@ -212,7 +210,7 @@ void benchmarks()
 		// create
 		for(int i = 0; i < 10; ++i)
 		{
-			reflist.push_back(storage.create());
+			reflist.push_back(storage.create().index);
 		}
 
 		// delete
@@ -230,7 +228,7 @@ void benchmarks()
 		// create
 		for(int i = 0; i < 10; ++i)
 		{
-			reflist.push_back(storage.create());
+			reflist.push_back(storage.create().index);
 		}
 
 		// delete
@@ -248,7 +246,7 @@ void benchmarks()
 		// create
 		for(int i = 0; i < 20; ++i)
 		{
-			reflist.push_back(storage.create());
+			reflist.push_back(storage.create().index);
 		}
 
 		// delete
