@@ -26,11 +26,14 @@ inline void reset_all_pools()
 		pool->reset();
 }
 
-template <typename T> struct objectpool_node
+namespace pool
 {
-	objectpool_node() = default;
 
-	template <typename... Ts> objectpool_node(bool, Ts&&... args)
+template <typename T> struct storage_node
+{
+	storage_node() = default;
+
+	template <typename... Ts> storage_node(bool, Ts&&... args)
 	{
 		new (object_raw) T(std::forward<Ts>(args)...);
 	}
@@ -45,91 +48,59 @@ template <typename T> struct objectpool_node
 	short prev;
 };
 
-template <typename T> class objectpool;
-template <typename T> class objectpool_iterator
+template <typename T> class storage;
+template <typename T> class storage_iterator
 {
 public:
-	objectpool_iterator(objectpool<T> &objpool, short idx)
-		: pool(objpool)
+	storage_iterator(storage<T> &objpool, short idx)
+		: parent(objpool)
 		, index(idx)
 	{}
 
 	T &operator*()
 	{
-		return pool[index];
+		return parent[index];
 	}
 
 	void operator++()
 	{
-		index = pool.storage[index].next;
+		index = parent.array[index].next;
 	}
 
-	bool operator==(const objectpool_iterator<T> &other) const
+	bool operator==(const storage_iterator<T> &other) const
 	{
 		return index == other.index;
 	}
 
-	bool operator!=(const objectpool_iterator<T> &other) const
+	bool operator!=(const storage_iterator<T> &other) const
 	{
 		return index != other.index;
 	}
 
 private:
-	objectpool<T> &pool;
+	storage<T> &parent;
 	short index;
 };
 
-template <typename T> class objectpool_const_iterator
+template <typename T> class storage : resettable
 {
-public:
-	objectpool_const_iterator(const objectpool<T> &objpool, short idx)
-		: pool(objpool)
-		, index(idx)
-	{}
-
-	const T &operator*() const
-	{
-		return pool[index];
-	}
-
-	void operator++()
-	{
-		index = pool.storage[index].next;
-	}
-
-	bool operator==(const objectpool_const_iterator<T> &other) const
-	{
-		return index == other.index;
-	}
-
-	bool operator!=(const objectpool_const_iterator<T> &other) const
-	{
-		return index != other.index;
-	}
-
-private:
-	const objectpool<T> &pool;
-	short index;
-};
-
-template <typename T> class objectpool : resettable
-{
-	friend class objectpool_iterator<T>;
+	friend class storage_iterator<T>;
+	//friend class objectpool_const_iterator<T>;
 
 	constexpr static int INITIAL_CAPACITY = 10;
 
 public:
-	objectpool()
+	storage()
 		: num(0)
 		, head(-1)
 		, tail(-1)
 		, capacity(INITIAL_CAPACITY)
-		, storage(new objectpool_node<T>[INITIAL_CAPACITY])
+		, array(new storage_node<T>[INITIAL_CAPACITY])
 	{
 		all_pools.push_back(this);
 	}
 
-	virtual ~objectpool() override
+	virtual ~storage() override
 	{
 		reset();
 	}
@@ -150,13 +121,13 @@ public:
 			loc = replace(idx, std::forward<Ts>(args)...);
 		}
 
-		objectpool_node<T> &node = storage[loc];
+		storage_node<T> &node = array[loc];
 
 		node.prev = tail;
 		node.next = -1;
 
 		if(tail != -1)
-			storage[tail].next = loc;
+			array[tail].next = loc;
 		else
 			head = loc; // list is empty
 
@@ -168,8 +139,8 @@ public:
 
 	void destroy(const T &obj)
 	{
-		const objectpool_node<T> *node = (const objectpool_node<T>*)&obj;
-		const int idx = node - storage.get();
+		const storage_node<T> *node = (const storage_node<T>*)&obj;
+		const int idx = node - array.get();
 
 #ifndef NDEBUG
 		if(idx >= capacity || idx < 0)
@@ -182,34 +153,35 @@ public:
 	void destroy(const int loc)
 	{
 		freelist.push_back(loc);
-		storage[loc].destruct();
+		array[loc].destruct();
 
-		objectpool_node<T> &node = storage[loc];
+		storage_node<T> &node = array[loc];
 
 		if(node.prev == -1)
 			head = node.next;
 		else
-			storage[node.prev].next = node.next;
+			array[node.prev].next = node.next;
 
 		if(node.next == -1)
 			tail = node.prev;
 		else
-			storage[node.next].prev = node.prev;
+			array[node.next].prev = node.prev;
 
 		if(--num == 0)
 			freelist.clear();
 	}
 
-	objectpool_iterator<T> begin()
+	storage_iterator<T> begin()
 	{
-		return objectpool_iterator<T>(*this, head);
+		return storage_iterator<T>(*this, head);
 	}
 
-	objectpool_iterator<T> end()
+	storage_iterator<T> end()
 	{
-		return objectpool_iterator<T>(*this, -1);
+		return storage_iterator<T>(*this, -1);
 	}
 
+	/*
 	objectpool_const_iterator<T> begin() const
 	{
 		return objectpool_const_iterator<T>(*this, head);
@@ -219,6 +191,7 @@ public:
 	{
 		return objectpool_const_iterator<T>(*this, -1);
 	}
+	*/
 
 	T &operator[](const int idx)
 	{
@@ -226,7 +199,7 @@ public:
 		if(idx >= capacity || idx < 0)
 			win::bug("error: index " + std::to_string(idx) + " out of bounds in pool of " + typeid(T).name());
 #endif
-		return (T&)storage[idx];
+		return (T&)array[idx];
 	}
 
 	const T &operator[](const int idx) const
@@ -235,7 +208,7 @@ public:
 		if(idx >= capacity || idx < 0)
 			win::bug("error: index " + std::to_string(idx) + " out of bounds in pool of " + typeid(T).name());
 #endif
-		return (T&)storage[idx];
+		return (T&)array[idx];
 	}
 
 	int count() const
@@ -245,9 +218,9 @@ public:
 
 	int index(const T &object) const
 	{
-		const objectpool_node<T> *node = (const objectpool_node<T>*)&object;
+		const storage_node<T> *node = (const storage_node<T>*)&object;
 
-		return node - storage.get();
+		return node - array.get();
 	}
 
 	virtual void reset() override
@@ -275,7 +248,7 @@ private:
 			win::bug("out of bounds when appending");
 #endif
 
-		new (storage.get() + num) objectpool_node<T>(true, std::forward<Ts>(args)...);
+		new (array.get() + num) storage_node<T>(true, std::forward<Ts>(args)...);
 		return num;
 	}
 
@@ -286,7 +259,7 @@ private:
 			win::bug("out of bounds when replacing");
 #endif
 
-		new (storage.get() + idx) objectpool_node<T>(true, std::forward<Ts>(args)...);
+		new (array.get() + idx) storage_node<T>(true, std::forward<Ts>(args)...);
 		return idx;
 	}
 
@@ -301,9 +274,9 @@ private:
 
 		const int new_capacity = capacity * mult;
 
-		objectpool_node<T> *new_storage = new objectpool_node<T>[new_capacity];
-		memcpy(new_storage, storage.get(), sizeof(objectpool_node<T>) * capacity);
-		storage.reset(new_storage);
+		storage_node<T> *new_array = new storage_node<T>[new_capacity];
+		memcpy(new_array, array.get(), sizeof(storage_node<T>) * capacity);
+		array.reset(new_array);
 
 		capacity = new_capacity;
 	}
@@ -312,8 +285,10 @@ private:
 	int head;
 	int tail;
 	int capacity;
-	std::unique_ptr<objectpool_node<T>[]> storage;
+	std::unique_ptr<storage_node<T>[]> array;
 	std::vector<int> freelist;
 };
+
+}
 
 #endif
