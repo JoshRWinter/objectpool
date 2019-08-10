@@ -11,21 +11,6 @@ namespace win
 	[[noreturn]] void bug(const std::string &s) { fprintf(stderr, "%s\n", s.c_str()); abort(); }
 }
 
-struct resettable
-{
-	virtual void reset() = 0;
-	virtual ~resettable() = 0;
-};
-inline resettable::~resettable() {}
-
-inline std::vector<resettable*> all_pools;
-
-inline void reset_all_pools()
-{
-	for(resettable *pool : all_pools)
-		pool->reset();
-}
-
 namespace pool
 {
 
@@ -160,7 +145,19 @@ private:
 	short index;
 };
 
-template <typename T> class storage : resettable
+struct storage_base
+{
+	virtual void reset() = 0;
+	virtual ~storage_base() = 0;
+
+	inline static std::vector<storage_base*> all;
+
+	static void reset_all() { for(storage_base *store : all) store->reset(); }
+};
+
+inline storage_base::~storage_base() {}
+
+template <typename T> class storage : storage_base
 {
 	friend class storage_iterator<T>;
 	friend class storage_const_iterator<T>;
@@ -177,7 +174,7 @@ public:
 		, capacity(INITIAL_CAPACITY)
 		, array(new storage_node<T>[INITIAL_CAPACITY])
 	{
-		all_pools.push_back(this);
+		all.push_back(this);
 	}
 
 	virtual ~storage() override
