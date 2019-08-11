@@ -14,52 +14,6 @@ namespace win
 namespace pool
 {
 
-template <typename T> struct storage;
-
-#ifndef NDEBUG
-template <typename T> void index_check(storage<T> *parent, int index)
-{
-	if(parent == NULL || index < 0 || index >= parent->capacity)
-		win::bug("index " + std::to_string(index) + " is out of bounds for pool<" + typeid(decltype(parent)).name());
-}
-
-template <typename T> void index_check(const storage<T> *parent, int index)
-{
-	if(parent == NULL || index < 0 || index >= parent->capacity)
-		win::bug("index " + std::to_string(index) + " is out of bounds for pool<" + typeid(decltype(parent)).name());
-}
-#endif
-
-template <typename T> struct tenant
-{
-	tenant()
-		: parent(NULL), index(-1) {}
-	tenant(storage<T> *const p, const unsigned i)
-		: parent(p), index(i) {}
-
-	T &operator->()
-	{
-#ifndef NDEBUG
-		index_check(parent, index);
-#endif
-
-		return *(T*)parent->array[index].object_raw;
-	}
-
-	T &operator*()
-	{
-#ifndef NDEBUG
-		index_check(parent, index);
-#endif
-
-		return parent->array[index].object_raw;
-	}
-
-private:
-	storage<T> *const parent;
-	const int index;
-};
-
 template <typename T> struct storage_node
 {
 	storage_node() = default;
@@ -75,74 +29,106 @@ template <typename T> struct storage_node
 	}
 
 	unsigned char object_raw[sizeof(T)];
-	short next;
-	short prev;
+	storage_node<T> *next;
+	storage_node<T> *prev;
 };
 
 template <typename T> class storage_iterator
 {
 public:
-	storage_iterator(storage<T> &objpool, short idx)
-		: parent(objpool)
-		, index(idx)
+	storage_iterator(storage_node<T> *head)
+		: node(head)
 	{}
 
 	T &operator*()
 	{
-		return parent[index];
+		return *(T*)node->object_raw;
+	}
+
+	T *operator->()
+	{
+		return (T*)node->object_raw;
 	}
 
 	void operator++()
 	{
-		index = parent.array[index].next;
+		node = node->next;
 	}
 
 	bool operator==(const storage_iterator<T> &other) const
 	{
-		return index == other.index;
+		return node == other.node;
 	}
 
 	bool operator!=(const storage_iterator<T> &other) const
 	{
-		return index != other.index;
+		return node != other.node;
 	}
 
 private:
-	storage<T> &parent;
-	short index;
+	storage_node<T> *node;
 };
 
 template <typename T> class storage_const_iterator
 {
 public:
-	storage_const_iterator(const storage<T> &objpool, short idx)
-		: parent(objpool)
-		, index(idx)
+	storage_const_iterator(storage_node<T> *head)
+		: node(head)
 	{}
 
 	const T &operator*() const
 	{
-		return parent[index];
+		return *(T*)node->object_raw;
+	}
+
+	const T *operator->() const
+	{
+		return (T*)node->object_raw;
 	}
 
 	void operator++()
 	{
-		index = parent.array[index].next;
+		node = node->next;
 	}
 
 	bool operator==(const storage_const_iterator<T> &other) const
 	{
-		return index == other.index;
+		return node == other.node;
 	}
 
 	bool operator!=(const storage_const_iterator<T> &other) const
 	{
-		return index != other.index;
+		return node != other.node;
 	}
 
 private:
-	const storage<T> &parent;
-	short index;
+	const storage_node<T> *node;
+};
+
+template <typename T, int capacity_override> struct storage_fragment
+{
+	storage_fragment(const storage_fragment&) = delete;
+	storage_fragment(storage_fragment&&) = delete;
+	void operator=(const storage_fragment&) = delete;
+	void operator=(storage_fragment&&) = delete;
+
+	template <size_t element_size, int desired> static constexpr size_t calculate_capacity()
+	{
+		if constexpr(desired != -1)
+			return desired;
+
+		return 4'000 / element_size;
+	}
+
+	static constexpr size_t capacity = calculate_capacity<sizeof(T), capacity_override>();
+
+	storage_fragment()
+	{
+		memset(store, 0, sizeof(store));
+	}
+
+	T store[capacity];
+	std::unique_ptr<storage_fragment<T, capacity_override>> next;
 };
 
 struct storage_base
@@ -157,22 +143,16 @@ struct storage_base
 
 inline storage_base::~storage_base() {}
 
-template <typename T> class storage : storage_base
+template <typename T, int desired = -1> class storage : storage_base
 {
 	friend class storage_iterator<T>;
-	friend class storage_const_iterator<T>;
-	friend void index_check<T>(storage<T>*, int);
-	friend void index_check<T>(const storage<T>*, int);
-
-	constexpr static int INITIAL_CAPACITY = 10;
 
 public:
 	storage()
 		: num(0)
-		, head(-1)
-		, tail(-1)
-		, capacity(INITIAL_CAPACITY)
-		, array(new storage_node<T>[INITIAL_CAPACITY])
+		, head(NULL)
+		, tail(NULL)
+		, store(new storage_fragment<storage_node<T>, desired>())
 	{
 		all.push_back(this);
 	}
@@ -182,110 +162,58 @@ public:
 		reset();
 	}
 
-	template <typename... Ts> tenant<T> create(Ts&&... args)
+	template <typename... Ts> T &create(Ts&&... args)
 	{
-		int loc;
+		storage_node<T> *node;
 
 		if(freelist.empty())
 		{
-			loc = append(std::forward<Ts>(args)...);
+			node = append(std::forward<Ts>(args)...);
 		}
 		else
 		{
-			const int idx = freelist.back();
+			node = freelist.back();
 			freelist.erase(freelist.end() - 1);
+			node_check(node);
 
-			loc = replace(idx, std::forward<Ts>(args)...);
+			replace(node, std::forward<Ts>(args)...);
 		}
 
-		storage_node<T> &node = array[loc];
+		node->prev = tail;
+		node->next = NULL;
 
-		node.prev = tail;
-		node.next = -1;
-
-		if(tail != -1)
-			array[tail].next = loc;
+		if(tail != NULL)
+			tail->next = node;
 		else
-			head = loc; // list is empty
+			head = node; // list is empty
 
-		tail = loc;
+		tail = node;
 
 		++num;
-		return tenant<T>(this, loc);
+		return *(T*)node->object_raw;
 	}
 
-	void destroy(const tenant<T> &t)
-	{
-		destroy(t.index);
-	}
-
-	void destroy(const T &obj)
+	void destroy(T &obj)
 	{
 		storage_node<T> *node = (storage_node<T>*)&obj;
-		destroy(node - array.get());
-	}
 
-	void destroy(const int loc)
-	{
-#ifndef NDEBUG
-		index_check(this, loc);
-#endif
+		node_check(node);
 
-		freelist.push_back(loc);
-		array[loc].destruct();
+		freelist.push_back(node);
+		node->destruct();
 
-		storage_node<T> &node = array[loc];
-
-		if(node.prev == -1)
-			head = node.next;
+		if(node->prev == NULL)
+			head = node->next;
 		else
-			array[node.prev].next = node.next;
+			node->prev->next = node->next;
 
-		if(node.next == -1)
-			tail = node.prev;
+		if(node->next == NULL)
+			tail = node->prev;
 		else
-			array[node.next].prev = node.prev;
+			node->next->prev = node->prev;
 
 		if(--num == 0)
 			freelist.clear();
-	}
-
-	storage_iterator<T> begin()
-	{
-		return storage_iterator<T>(*this, head);
-	}
-
-	storage_iterator<T> end()
-	{
-		return storage_iterator<T>(*this, -1);
-	}
-
-	storage_const_iterator<T> begin() const
-	{
-		return storage_const_iterator<T>(*this, head);
-	}
-
-	storage_const_iterator<T> end() const
-	{
-		return storage_const_iterator<T>(*this, -1);
-	}
-
-	T &operator[](int idx)
-	{
-#ifndef NDEBUG
-		index_check(this, idx);
-#endif
-
-		return *(T*)array[idx].object_raw;
-	}
-
-	const T &operator[](int idx) const
-	{
-#ifndef NDEBUG
-		index_check(this, idx);
-#endif
-
-		return *(const T*)array[idx].object_raw;
 	}
 
 	int count() const
@@ -305,58 +233,81 @@ public:
 		freelist.clear();
 	}
 
-private:
-	template <typename... Ts> int append(Ts&&... args)
+	storage_iterator<T> begin()
 	{
-		if(num >= capacity)
+		return storage_iterator<T>(head);
+	}
+
+	storage_iterator<T> end()
+	{
+		return storage_iterator<T>(NULL);
+	}
+
+	storage_const_iterator<T> begin() const
+	{
+		return storage_const_iterator<T>(head);
+	}
+
+	storage_const_iterator<T> end() const
+	{
+		return storage_const_iterator<T>(NULL);
+	}
+
+private:
+	template <typename... Ts> storage_node<T> *append(Ts&&... args)
+	{
+		// find somewhere to put it
+		int occupied = num;
+
+		storage_fragment<storage_node<T>, desired> *current = store.get();
+		while(occupied >= pool::storage_fragment<storage_node<T>, desired>::capacity)
 		{
-			resize();
+			occupied -= pool::storage_fragment<storage_node<T>, desired>::capacity;
+			storage_fragment<storage_node<T>, desired> *next = current->next.get();
+			if(next == NULL)
+			{
+				current->next.reset(new storage_fragment<storage_node<T>, desired>());
+				next = current->next.get();
+			}
+
+			current = next;
 		}
 
-#ifndef NDEBUG
-		if(num >= capacity)
-			win::bug("out of bounds when appending");
-#endif
+		storage_node<T> *const spot = current->store + occupied;
 
-		new (array.get() + num) storage_node<T>(true, std::forward<Ts>(args)...);
-		return num;
+		node_check(spot);
+
+		new (spot) storage_node<T>(true, std::forward<Ts>(args)...);
+		return spot;
 	}
 
-	template <typename... Ts> int replace(const int idx, Ts&&... args)
+	template <typename... Ts> void replace(storage_node<T> *const spot, Ts&&... args)
 	{
-#ifndef NDEBUG
-		if(idx >= capacity)
-			win::bug("out of bounds when replacing");
-#endif
-
-		new (array.get() + idx) storage_node<T>(true, std::forward<Ts>(args)...);
-		return idx;
+		new (spot) storage_node<T>(true, std::forward<Ts>(args)...);
 	}
 
-	void resize()
+	void node_check(const storage_node<T> *node) const
 	{
-		double mult;
+#ifndef NDEBUG
+		storage_fragment<storage_node<T>, desired> *current = store.get();
+		do
+		{
+			const int index = node - current->store;
+			if(index >= 0 && index < storage_fragment<storage_node<T>, desired>::capacity)
+				return;
 
-		if(capacity < 30)
-			mult = 2.0;
-		else
-			mult = 1.5;
+			current = current->next.get();
+		} while(current != NULL);
 
-		const int new_capacity = capacity * mult;
-
-		storage_node<T> *new_array = new storage_node<T>[new_capacity];
-		memcpy(new_array, array.get(), sizeof(storage_node<T>) * capacity);
-		array.reset(new_array);
-
-		capacity = new_capacity;
+		win::bug("node of type " + std::string(typeid(T).name()) + " not in pool");
+#endif
 	}
 
 	int num; // number of live objects in the pool
-	int head;
-	int tail;
-	int capacity;
-	std::unique_ptr<storage_node<T>[]> array;
-	std::vector<int> freelist;
+	storage_node<T> *head;
+	storage_node<T> *tail;
+	std::unique_ptr<storage_fragment<storage_node<T>, desired>> store;
+	std::vector<storage_node<T>*> freelist;
 };
 
 }
