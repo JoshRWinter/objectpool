@@ -117,6 +117,34 @@ void tests()
 		assert(looped == 2);
 		say("looped 2 times");
 
+		entity &e5 = storage.create();
+		assert(storage.num == 3);
+
+		assert(storage.head == storage.store->store + 0);
+		assert(storage.tail == storage.store->store + 2);
+		assert(((pool::storage_node<entity>*)&e1)->next == storage.store->store + 3);
+		assert(((pool::storage_node<entity>*)&e1)->prev == NULL);
+		assert(((pool::storage_node<entity>*)&e4)->next == storage.store->store + 2);
+		assert(((pool::storage_node<entity>*)&e4)->prev == storage.store->store + 0);
+		assert(((pool::storage_node<entity>*)&e5)->next == NULL);
+		assert(((pool::storage_node<entity>*)&e5)->prev == storage.store->store + 3);
+
+		assert(storage.freelist.size() == 1);
+		assert(storage.freelist[0] == (pool::storage_node<entity>*)&e2);
+
+		looped = 0;
+		for(const entity &e : storage)
+		{
+			++looped;
+			process(&e);
+		}
+
+		assert(looped == 3);
+		say("looped 3 times");
+
+		say("deleted e5");
+		storage.destroy(e5);
+
 		say("deleted e4");
 		storage.destroy(e4);
 
