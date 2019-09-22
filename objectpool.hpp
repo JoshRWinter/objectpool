@@ -14,23 +14,16 @@ namespace win
 namespace pool
 {
 
-template <typename T> struct storage_node
+template <typename T> struct storage_node : T
 {
-	storage_node() = default;
+	template <typename... Ts> storage_node(Ts&&... args)
+		: T(std::forward<Ts>(args)...)
+	{}
 
-	template <typename... Ts> storage_node(bool, Ts&&... args)
-	{
-		new (object_raw) T(std::forward<Ts>(args)...);
-	}
-
-	void destruct()
-	{
-		((T*)object_raw)->~T();
-	}
-
-	unsigned char object_raw[sizeof(T)];
 	storage_node<T> *next;
 	storage_node<T> *prev;
+
+	void *spot;
 };
 
 template <typename T> class storage_iterator
@@ -42,12 +35,12 @@ public:
 
 	T &operator*()
 	{
-		return *(T*)node->object_raw;
+		return *node;
 	}
 
 	T *operator->()
 	{
-		return (T*)node->object_raw;
+		return node;
 	}
 
 	void operator++()
@@ -72,18 +65,18 @@ private:
 template <typename T> class storage_const_iterator
 {
 public:
-	storage_const_iterator(storage_node<T> *head)
+	storage_const_iterator(const storage_node<T> *head)
 		: node(head)
 	{}
 
 	const T &operator*() const
 	{
-		return *(T*)node->object_raw;
+		return *node;
 	}
 
 	const T *operator->() const
 	{
-		return (T*)node->object_raw;
+		return node;
 	}
 
 	void operator++()
@@ -127,7 +120,7 @@ template <typename T, int capacity_override> struct storage_fragment
 		memset(store, 0, sizeof(store));
 	}
 
-	T store[capacity];
+	typename std::aligned_storage<sizeof(T), alignof(T)>::type store[capacity];
 	std::unique_ptr<storage_fragment<T, capacity_override>> next;
 };
 
@@ -164,20 +157,22 @@ public:
 
 	template <typename... Ts> T &create(Ts&&... args)
 	{
-		storage_node<T> *node;
+		typename std::aligned_storage<sizeof(storage_node<T>), alignof(storage_node<T>)>::type *spot;
 
 		if(freelist.empty())
 		{
-			node = append(std::forward<Ts>(args)...);
+			spot = find_first_spot();
 		}
 		else
 		{
-			node = freelist.back();
+			spot = freelist.back();
 			freelist.erase(freelist.end() - 1);
-			node_check(node);
 
-			replace(node, std::forward<Ts>(args)...);
+			node_check(spot);
 		}
+
+		storage_node<T> *node = new (spot) storage_node<T>(std::forward<Ts>(args)...);
+		node->spot = spot;
 
 		node->prev = tail;
 		node->next = NULL;
@@ -190,17 +185,16 @@ public:
 		tail = node;
 
 		++num;
-		return *(T*)node->object_raw;
+		return *node;
 	}
 
 	void destroy(T &obj)
 	{
-		storage_node<T> *node = (storage_node<T>*)&obj;
+		storage_node<T> *node = static_cast<storage_node<T>*>(&obj);
+		auto spot = (typename std::aligned_storage<sizeof(storage_node<T>), alignof(storage_node<T>)>::type*)node->spot;
+		freelist.push_back(spot);
 
-		node_check(node);
-
-		freelist.push_back(node);
-		node->destruct();
+		node_check(spot);
 
 		if(node->prev == NULL)
 			head = node->next;
@@ -214,6 +208,8 @@ public:
 
 		if(--num == 0)
 			freelist.clear();
+
+		node->~storage_node<T>();
 	}
 
 	int count() const
@@ -254,16 +250,16 @@ public:
 	}
 
 private:
-	template <typename... Ts> storage_node<T> *append(Ts&&... args)
+	typename std::aligned_storage<sizeof(storage_node<T>), alignof(storage_node<T>)>::type *find_first_spot()
 	{
-		// find somewhere to put it
 		int occupied = num;
 
+		// find somewhere to put it
 		storage_fragment<storage_node<T>, desired> *current = store.get();
 		while(occupied >= pool::storage_fragment<storage_node<T>, desired>::capacity)
 		{
 			occupied -= pool::storage_fragment<storage_node<T>, desired>::capacity;
-			storage_fragment<storage_node<T>, desired> *next = current->next.get();
+			pool::storage_fragment<storage_node<T>, desired> *next = current->next.get();
 			if(next == NULL)
 			{
 				current->next.reset(new storage_fragment<storage_node<T>, desired>());
@@ -273,26 +269,20 @@ private:
 			current = next;
 		}
 
-		storage_node<T> *const spot = current->store + occupied;
+		typename std::aligned_storage<sizeof(storage_node<T>), alignof(storage_node<T>)>::type *const spot = current->store + occupied;
 
 		node_check(spot);
 
-		new (spot) storage_node<T>(true, std::forward<Ts>(args)...);
 		return spot;
 	}
 
-	template <typename... Ts> void replace(storage_node<T> *const spot, Ts&&... args)
-	{
-		new (spot) storage_node<T>(true, std::forward<Ts>(args)...);
-	}
-
-	void node_check(const storage_node<T> *node) const
+	void node_check(const typename std::aligned_storage<sizeof(storage_node<T>), alignof(storage_node<T>)>::type *spot) const
 	{
 #ifndef NDEBUG
 		storage_fragment<storage_node<T>, desired> *current = store.get();
 		do
 		{
-			const int index = node - current->store;
+			const int index = spot - current->store;
 			if(index >= 0 && index < storage_fragment<storage_node<T>, desired>::capacity)
 				return;
 
@@ -307,7 +297,7 @@ private:
 	storage_node<T> *head;
 	storage_node<T> *tail;
 	std::unique_ptr<storage_fragment<storage_node<T>, desired>> store;
-	std::vector<storage_node<T>*> freelist;
+	std::vector<typename std::aligned_storage<sizeof(storage_node<T>), alignof(storage_node<T>)>::type*> freelist;
 };
 
 }

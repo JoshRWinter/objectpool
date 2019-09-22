@@ -24,8 +24,8 @@ void tests()
 		entity &e1 = storage->create();
 
 		assert(storage->num == 1);
-		assert(storage->head == storage->store->store);
-		assert(storage->tail == storage->store->store);
+		assert(storage->head == static_cast<pool::storage_node<entity>*>(&e1));
+		assert(storage->tail == static_cast<pool::storage_node<entity>*>(&e1));
 
 		// process the entities to prevent optimization
 		int looped = 0;
@@ -64,20 +64,20 @@ void tests()
 
 		assert(storage.num == 4);
 
-		assert(storage.head == storage.store->store + 0);
-		assert(storage.tail == storage.store->store + 3);
+		assert(storage.head == static_cast<pool::storage_node<entity>*>(&e1));
+		assert(storage.tail == static_cast<pool::storage_node<entity>*>(&e4));
 
-		assert(((pool::storage_node<entity>*)&e1)->next == storage.store->store + 1);
-		assert(((pool::storage_node<entity>*)&e1)->prev == NULL);
+		assert(static_cast<pool::storage_node<entity>*>(&e1)->next == static_cast<pool::storage_node<entity>*>(&e2));
+		assert(static_cast<pool::storage_node<entity>*>(&e1)->prev == NULL);
 
-		assert(((pool::storage_node<entity>*)&e2)->next == storage.store->store + 2);
-		assert(((pool::storage_node<entity>*)&e2)->prev == storage.store->store + 0);
+		assert(static_cast<pool::storage_node<entity>*>(&e2)->next == static_cast<pool::storage_node<entity>*>(&e3));
+		assert(static_cast<pool::storage_node<entity>*>(&e2)->prev == static_cast<pool::storage_node<entity>*>(&e1));
 
-		assert(((pool::storage_node<entity>*)&e3)->next == storage.store->store + 3);
-		assert(((pool::storage_node<entity>*)&e3)->prev == storage.store->store + 1);
+		assert(static_cast<pool::storage_node<entity>*>(&e3)->next == static_cast<pool::storage_node<entity>*>(&e4));
+		assert(static_cast<pool::storage_node<entity>*>(&e3)->prev == static_cast<pool::storage_node<entity>*>(&e2));
 
-		assert(((pool::storage_node<entity>*)&e4)->next == NULL);
-		assert(((pool::storage_node<entity>*)&e4)->prev == storage.store->store + 2);
+		assert(static_cast<pool::storage_node<entity>*>(&e4)->next == NULL);
+		assert(static_cast<pool::storage_node<entity>*>(&e4)->prev == static_cast<pool::storage_node<entity>*>(&e3));
 
 		int looped = 0;
 		for(entity &e : storage)
@@ -95,16 +95,16 @@ void tests()
 
 		assert(storage.num == 2);
 
-		assert(storage.head == storage.store->store + 0);
-		assert(storage.tail == storage.store->store + 3);
-		assert(((pool::storage_node<entity>*)&e1)->next == storage.store->store + 3);
-		assert(((pool::storage_node<entity>*)&e1)->prev == NULL);
-		assert(((pool::storage_node<entity>*)&e4)->next == NULL);
-		assert(((pool::storage_node<entity>*)&e4)->prev == storage.store->store + 0);
+		assert(storage.head == static_cast<pool::storage_node<entity>*>(&e1));
+		assert(storage.tail == static_cast<pool::storage_node<entity>*>(&e4));
+		assert(static_cast<pool::storage_node<entity>*>(&e1)->next == static_cast<pool::storage_node<entity>*>(&e4));
+		assert(static_cast<pool::storage_node<entity>*>(&e1)->prev == NULL);
+		assert(static_cast<pool::storage_node<entity>*>(&e4)->next == NULL);
+		assert(static_cast<pool::storage_node<entity>*>(&e4)->prev == static_cast<pool::storage_node<entity>*>(&e1));
 
 		assert(storage.freelist.size() == 2);
-		assert(storage.freelist[0] == (pool::storage_node<entity>*)&e2);
-		assert(storage.freelist[1] == (pool::storage_node<entity>*)&e3);
+		assert(storage.freelist[0] == storage.store->store + 1);
+		assert(storage.freelist[1] == storage.store->store + 2);
 
 		looped = 0;
 		const pool::storage<entity> &const_storage = storage;
@@ -120,17 +120,17 @@ void tests()
 		entity &e5 = storage.create();
 		assert(storage.num == 3);
 
-		assert(storage.head == storage.store->store + 0);
-		assert(storage.tail == storage.store->store + 2);
-		assert(((pool::storage_node<entity>*)&e1)->next == storage.store->store + 3);
-		assert(((pool::storage_node<entity>*)&e1)->prev == NULL);
-		assert(((pool::storage_node<entity>*)&e4)->next == storage.store->store + 2);
-		assert(((pool::storage_node<entity>*)&e4)->prev == storage.store->store + 0);
-		assert(((pool::storage_node<entity>*)&e5)->next == NULL);
-		assert(((pool::storage_node<entity>*)&e5)->prev == storage.store->store + 3);
+		assert(storage.head == static_cast<pool::storage_node<entity>*>(&e1));
+		assert(storage.tail == static_cast<pool::storage_node<entity>*>(&e5));
+		assert(static_cast<pool::storage_node<entity>*>(&e1)->next == static_cast<pool::storage_node<entity>*>(&e4));
+		assert(static_cast<pool::storage_node<entity>*>(&e1)->prev == NULL);
+		assert(static_cast<pool::storage_node<entity>*>(&e4)->next == static_cast<pool::storage_node<entity>*>(&e5));
+		assert(static_cast<pool::storage_node<entity>*>(&e4)->prev == static_cast<pool::storage_node<entity>*>(&e1));
+		assert(static_cast<pool::storage_node<entity>*>(&e5)->next == NULL);
+		assert(static_cast<pool::storage_node<entity>*>(&e5)->prev == static_cast<pool::storage_node<entity>*>(&e4));
 
 		assert(storage.freelist.size() == 1);
-		assert(storage.freelist[0] == (pool::storage_node<entity>*)&e2);
+		assert(storage.freelist[0] == storage.store->store + 1);
 
 		looped = 0;
 		for(const entity &e : storage)
@@ -145,13 +145,13 @@ void tests()
 		say("deleted e5");
 		storage.destroy(e5);
 
-		say("deleted e4");
-		storage.destroy(e4);
+		say("deleted e1");
+		storage.destroy(e1);
 
-		assert(((pool::storage_node<entity>*)&e1)->next == NULL);
-		assert(((pool::storage_node<entity>*)&e1)->prev == NULL);
-		assert(storage.head == (pool::storage_node<entity>*)&e1);
-		assert(storage.tail == (pool::storage_node<entity>*)&e1);
+		assert(static_cast<pool::storage_node<entity>*>(&e4)->next == NULL);
+		assert(static_cast<pool::storage_node<entity>*>(&e4)->prev == NULL);
+		assert(storage.head == static_cast<pool::storage_node<entity>*>(&e4));
+		assert(storage.tail == static_cast<pool::storage_node<entity>*>(&e4));
 
 		assert(storage.num == 1);
 
@@ -165,8 +165,8 @@ void tests()
 		assert(looped == 1);
 		say("looped 1 time");
 
-		say("deleted e1");
-		storage.destroy(e1);
+		say("deleted e4");
+		storage.destroy(e4);
 
 		looped = 0;
 		for(entity &e : storage)
