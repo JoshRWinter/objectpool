@@ -1,13 +1,13 @@
-#include "user.hpp"
+#include "objectpooltestsuite.hpp"
 
 float xsum = 0.0f;
 float ysum = 0.0f;
 float rotsum = 0.0f;
 float dirsum = 0.0f;
 
-pool::storage<entity> *get_pool()
+pool::Storage<entity> *get_pool()
 {
-	return new pool::storage<entity>();
+	return new pool::Storage<entity>();
 }
 
 void process(entity *e)

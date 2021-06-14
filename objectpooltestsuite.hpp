@@ -28,7 +28,19 @@ struct entity
 		health = mersenne(50, 100);
 		direction = mersenne(0.0f, 360.0f);
 	}
-	
+	entity(const entity &rhs)
+	{
+		id = rhs.id;
+		x = rhs.x;
+		y = rhs.y;
+		w = rhs.w;
+		h = rhs.h;
+		rot = rhs.rot;
+		dead = rhs.dead;
+		health = rhs.health;
+		direction = rhs.direction;
+	}
+
 	~entity()
 	{
 		//fprintf(stderr, "entity destructor\n");
@@ -78,6 +90,6 @@ struct timing
 	std::chrono::time_point<std::chrono::high_resolution_clock> ending;
 };
 
-pool::storage<entity> *get_pool();
+pool::Storage<entity> *get_pool();
 void process(entity*);
 void process(const entity*);

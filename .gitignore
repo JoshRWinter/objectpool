@@ -1,3 +1,4 @@
 user
 *.so
 *.o
+CMakeLists.txt.user

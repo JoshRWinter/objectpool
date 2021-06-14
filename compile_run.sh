@@ -10,7 +10,7 @@ if [ $? -ne 0 ]; then
 	exit 1
 fi
 
-g++ -o user -O2 -std=c++17 user.cpp -L. -lpool -s
+g++ -o user -O2 -std=c++17 main.cpp -L. -lpool -s
 
 if [ $? -ne 0 ]; then
 	exit 1
